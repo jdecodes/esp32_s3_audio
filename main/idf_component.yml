@@ -1,0 +1,3 @@
+# main/idf_component.yml  (cJSON is no longer part of ESP-IDF 6.x)
+dependencies:
+  espressif/cjson: "^1.7.19"
