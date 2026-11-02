@@ -1,3 +1,584 @@
-Enable :
+# ESP32-S3 Audio Streaming
+
+An ESP32-S3 based Wi-Fi audio device. The ESP32 creates its own Wi-Fi network (SoftAP), and a laptop can connect to it to record audio from a microphone or stream audio to a speaker.
+
+The project supports both directions:
+
+- **Recording:** INMP441 microphone → ESP32 → UDP → Laptop
+- **Playback:** Laptop WAV file → UDP → ESP32 → Speaker
+
+No router or existing Wi-Fi network is required. The ESP32 and laptop communicate directly.
+
+## Features
+
+- ESP32-S3 runs as a Wi-Fi SoftAP.
+- Record audio from an INMP441 digital I2S microphone.
+- Stream microphone audio to a laptop over UDP.
+- Play received microphone audio through the laptop.
+- Save microphone recordings as WAV files.
+- Stream WAV files from the laptop to an ESP32-connected speaker.
+- WebSocket-based control for starting and stopping recording and playback.
+- Optional microphone test tone for testing the recording path.
+
+## Hardware
+
+### 1. ESP32-S3
+
+The ESP32-S3 acts as the audio device and Wi-Fi access point.
+
+### 2. INMP441 digital microphone
+
+Connect the INMP441 as follows:
+
+| INMP441 | ESP32-S3 |
+|---|---|
+| VDD | 3.3V |
+| GND | GND |
+| SCK | GPIO 4 |
+| WS | GPIO 5 |
+| SD | GPIO 6 |
+| L/R | GND |
+
+The microphone is configured for the left I2S slot.
+
+These pins are configured in `main/mic_streamer.cpp`.
+
+### 3. MAX98357A speaker amplifier
+
+The speaker playback path uses a MAX98357A I2S amplifier.
+
+| MAX98357A | ESP32-S3 |
+|---|---|
+| VIN | 5V |
+| GND | GND |
+| BCLK | GPIO 7 |
+| LRC | GPIO 8 |
+| DIN | GPIO 9 |
+| SD | Leave unconnected |
+| GAIN | Leave unconnected |
+
+Connect your speaker to the amplifier's speaker output terminals.
+
+These pins are configured in `main/speaker_streamer.cpp`.
+
+## Audio configuration
+
+The current audio configuration is:
+
+| Parameter | Value |
+|---|---|
+| Sample rate | 16,000 Hz |
+| Sample format | Signed 16-bit PCM |
+| Channels | Mono |
+| Frames per UDP packet | 512 |
+| Packet duration | 32 ms |
+| UDP packet size | 1,028 bytes (4-byte header + 1,024-byte audio payload) |
+
+The configuration is shared between the ESP32 firmware and the Python host utilities.
+
+Firmware: `main/audio_config.h`
+
+Host: `host/configs.py`
+
+Make sure both sides use matching settings when changing the audio configuration.
+
+## Wi-Fi setup
+
+The ESP32 creates its own Wi-Fi access point when it boots.
+
+Default configuration:
+
+| Setting | Value |
+|---|---|
+| SSID | `Jd-Mic` |
+| Password | `1234567890` |
+| ESP32 IP | `192.168.4.1` |
+| Wi-Fi security | WPA2 |
+| Maximum clients | 1 |
+
+The SSID and password are configured in `main/softap_setup.h`.
+
+### Connect from Windows
+
+1. Power on the ESP32-S3.
+2. Open Windows Wi-Fi settings.
+3. Find and connect to `Jd-Mic`.
+4. Enter the configured Wi-Fi password.
+5. Once connected, open the network properties for `Jd-Mic`.
+6. Change the network profile to **Private network**.
+
+On Windows 11:
+
+Settings → Network & Internet → Wi-Fi → Jd-Mic → Network profile type → Private.
+
+The Private profile allows Windows to apply its private-network firewall rules. It does not provide internet access. The ESP32 network is intended for local communication between the laptop and the device.
+
+## Host setup (Windows)
+
+All host-side Python utilities are available inside the `host` directory.
+
+Open a terminal in the project directory:
+
+```bash
+cd host
+```
+
+### Create a Python virtual environment
+
+```bash
+python -m venv .venv
+```
+
+Activate it using Git Bash:
+
+```bash
+source .venv/Scripts/activate
+```
+
+Or using Windows CMD:
+
+```cmd
+.venv\Scripts\activate.bat
+```
+
+### Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+The host utilities use:
+
+- numpy
+- pyserial
+- sounddevice
+- websocket-client
+
+Make sure the ESP32 is powered on and your laptop is connected to `Jd-Mic` before running the audio utilities.
+
+## Recording: ESP32 microphone → Laptop
+
+The recording path uses the INMP441 microphone connected to the ESP32.
+
+Audio is captured over I2S, converted to 16-bit PCM samples, packetized and transmitted to the laptop over UDP.
+
+The laptop receives the packets, plays the audio locally and saves the recording as a WAV file.
+
+### Start the microphone client
+
+From the `host` directory:
+
+```bash
+python mic_cli.py
+```
+
+The client connects to the ESP32 control endpoint using WebSocket:
+
+```text
+ws://192.168.4.1/ws
+```
+
+The laptop listens for incoming audio on UDP port `5000`.
+
+You should see:
+
+```text
+ESP32 Wi-Fi Microphone
+----------------------
+Commands: start_rec, stop_rec, stats, quit
+```
+
+### Available commands
+
+Start recording:
+
+```text
+mic> start
+```
+
+Stop recording:
+
+```text
+mic> stop
+```
+
+Show recording statistics:
+
+```text
+mic> stats
+```
+
+Enable the microphone test tone:
+
+```text
+mic> tone on
+```
+
+Disable the test tone:
+
+```text
+mic> tone off
+```
+
+Exit:
+
+```text
+mic> quit
+```
+
+The test tone is generated by the ESP32 firmware. It is useful for checking the recording and UDP path without depending on actual microphone input. Start recording before enabling it.
+
+### Recording output
+
+Recordings are saved as WAV files on the laptop.
+
+The default output directory is:
+
+```text
+E:\mcu_recordings
+```
+
+This can be changed in:
+
+```text
+host/configs.py
+```
+
+The recording client also displays useful statistics:
+
+- Packets received
+- Packets lost
+- Audio playback underruns
+- Buffered audio duration
+- Total WAV bytes written
+- Audio duration versus wall-clock duration
+
+## Playback: Laptop → ESP32 speaker
+
+The playback path works in the opposite direction.
+
+A WAV file is read on the laptop, divided into audio packets and transmitted over UDP to the ESP32.
+
+The ESP32 receives the packets and writes the samples to its I2S speaker output using the MAX98357A amplifier.
+
+### Supported WAV format
+
+The current implementation accepts:
+
+| Parameter | Supported format |
+|---|---|
+| Sample format | PCM |
+| Bit depth | 16-bit |
+| Sample rate | 16,000 Hz |
+| Channels | Mono or stereo |
+
+Stereo files are mixed down to mono before transmission.
+
+### Play a WAV file
+
+Connect your laptop to `Jd-Mic` first.
+
+From the `host` directory:
+
+```bash
+python speaker_cli.py test_tone.wav
+```
+
+To play another WAV file:
+
+```bash
+python speaker_cli.py "E:\audio\my_recording.wav"
+```
+
+To repeat a WAV file continuously:
+
+```bash
+python speaker_cli.py test_tone.wav --loop
+```
+
+Press `Ctrl+C` to stop playback.
+
+If no filename is supplied, the default file configured in `host/configs.py` is used.
+
+### Convert an unsupported WAV file
+
+If your WAV file has a different sample rate or bit depth, convert it using FFmpeg:
+
+```bash
+ffmpeg -i input.wav -ar 16000 -ac 1 -c:a pcm_s16le output.wav
+```
+
+Then play the converted file:
+
+```bash
+python speaker_cli.py output.wav
+```
+
+## How communication works
+
+The project uses two communication paths.
+
+### Control path
+
+WebSocket is used for control messages.
+
+```text
+Laptop
+  |
+  | WebSocket
+  |
+  v
+ESP32 HTTP Server
+  |
+  +---- /ws
+  |
+  +---- Recording commands
+  |
+  +---- Playback commands
+```
+
+The WebSocket endpoint is:
+
+```text
+ws://192.168.4.1/ws
+```
+
+Commands include:
+
+- `hello_rec`
+- `start_rec`
+- `stop_rec`
+- `hello_play`
+- `start_play`
+- `stop_play`
+- `enable_test_tone`
+
+### Audio path
+
+UDP is used for audio data.
+
+Recording:
+
+```text
+INMP441
+   |
+   v
+ESP32 I2S RX
+   |
+   v
+Microphone Streamer
+   |
+   v
+UDP Sender
+   |
+   v
+Laptop UDP Receiver
+   |
+   +---- Local audio playback
+   |
+   +---- WAV file writer
+```
+
+Playback:
+
+```text
+Laptop WAV file
+   |
+   v
+WAV Reader
+   |
+   v
+WAV Streamer
+   |
+   v
+UDP Sender
+   |
+   v
+ESP32 UDP Receiver
+   |
+   v
+Speaker Streamer
+   |
+   v
+ESP32 I2S TX
+   |
+   v
+MAX98357A
+   |
+   v
+Speaker
+```
+
+Audio packets contain a sequence number followed by PCM samples. The sequence number helps the receiver detect missing, late or out-of-order packets.
+
+UDP is intentionally used for audio transport. WebSocket handles commands and session management, while UDP handles the actual audio stream.
+
+## Project structure
+
+```text
+esp32_s3_audio/
+|
++-- main/
+|   |
+|   +-- main.cpp
+|   +-- audio_config.h
+|   +-- command.h
+|   +-- softap_setup.cpp
+|   +-- softap_setup.h
+|   |
+|   +-- control_server.cpp
+|   +-- control_server.h
+|   |
+|   +-- stream_controller.cpp
+|   +-- stream_controller.h
+|   |
+|   +-- mic_streamer.cpp
+|   +-- mic_streamer.h
+|   |
+|   +-- udp_audio_sender.cpp
+|   +-- udp_audio_sender.h
+|   |
+|   +-- playback_controller.cpp
+|   +-- playback_controller.h
+|   |
+|   +-- speaker_streamer.cpp
+|   +-- speaker_streamer.h
+|   |
+|   +-- udp_audio_receiver.cpp
+|   +-- udp_audio_receiver.h
+|   |
+|   +-- tone_generator.h
+|
++-- host/
+|   |
+|   +-- mic_cli.py
+|   +-- mic_controller.py
+|   +-- speaker_cli.py
+|   +-- playback_controller.py
+|   +-- control_client.py
+|   |
+|   +-- udp_receiver.py
+|   +-- udp_sender.py
+|   |
+|   +-- wav_reader.py
+|   +-- wav_writer.py
+|   +-- wav_streamer.py
+|   |
+|   +-- streaming_player.py
+|   +-- wifi_manager.py
+|   +-- configs.py
+|   +-- requirements.txt
+|   +-- test_tone.wav
+|
++-- CMakeLists.txt
++-- dependencies.lock
++-- README.md
+```
+
+## Firmware build and flash
+
+This project uses ESP-IDF.
+
+Open an ESP-IDF terminal in the project directory.
+
+Set the target:
+
+```bash
+idf.py set-target esp32s3
+```
+
+Open menuconfig:
+
+```bash
+idf.py menuconfig
+```
+
+Make sure the following configuration options are enabled:
+
+```text
 CONFIG_HTTPD_WS_SUPPORT
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB
+```
+
+Build:
+
+```bash
+idf.py build
+```
+
+Flash the ESP32-S3 (replace `COMx` with your serial port):
+
+```bash
+idf.py -p COMx flash
+```
+
+Monitor serial logs:
+
+```bash
+idf.py -p COMx monitor
+```
+
+Or build, flash and monitor together:
+
+```bash
+idf.py -p COMx build flash monitor
+```
+
+## Troubleshooting
+
+### Laptop cannot connect to the ESP32
+
+- Check that the ESP32 is powered on.
+- Make sure `Jd-Mic` is visible.
+- Check the Wi-Fi password in `main/softap_setup.h`.
+- Make sure the laptop is connected to the ESP32 network rather than another Wi-Fi network.
+
+### WebSocket connection fails
+
+Check that the ESP32 is reachable:
+
+```bash
+ping 192.168.4.1
+```
+
+Check that the firmware has started the HTTP server and that the WebSocket endpoint `/ws` is registered.
+
+Also make sure `CONFIG_HTTPD_WS_SUPPORT` is enabled.
+
+### Recording receives no audio
+
+- Check INMP441 wiring.
+- Verify GPIO 4, GPIO 5 and GPIO 6.
+- Make sure the microphone L/R pin is connected to GND.
+- Check that UDP port 5000 is available on the laptop.
+- Check Windows Firewall permissions for Python on the Private network.
+
+### Speaker produces no sound
+
+- Check MAX98357A wiring and speaker connections.
+- Verify GPIO 7, GPIO 8 and GPIO 9.
+- Check the amplifier's 5V supply and common ground.
+- Make sure the WAV file is in the supported format.
+- Check the ESP32 serial logs for playback errors.
+
+### Audio is choppy or packets are lost
+
+- Keep the laptop close to the ESP32.
+- Avoid other heavy Wi-Fi traffic.
+- Check packet loss using the `stats` command.
+- Make sure the host and firmware audio configurations match.
+
+## Current limitations
+
+- The ESP32 SoftAP currently allows one connected client at a time.
+- The firmware uses one active WebSocket control session.
+- Audio is transported using UDP, so packet delivery is not guaranteed.
+- The current audio format is fixed at 16 kHz, 16-bit PCM, mono.
+- The speaker playback client expects PCM WAV files, not MP3 or other compressed formats.
+- The current host scripts are separate recording and playback clients. Running both simultaneously requires sharing the same control client/session.
+
+## Notes
+
+This is a work in progress. The goal is to have a small ESP32-based audio device that can be controlled directly from a laptop without depending on a router or cloud service.
+
+For now, the focus is on getting the recording and playback paths working reliably over Wi-Fi.
