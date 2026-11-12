@@ -17,5 +17,4 @@ idf_component_register(SRCS "stream_controller.cpp" "softap_setup.cpp"
                              esp_driver_i2s
                              esp_driver_gpio
                              esp_http_server)
-)
 

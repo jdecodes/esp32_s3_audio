@@ -11,6 +11,12 @@ const char* TAG = "WiFiMic_MicStreamer";
 
 constexpr int SHIFT = 14;                      // 8 clips, 16 is quiet
 
+// GND - YELLOW - GND
+// VDD - GREEN - -3V
+// LR - ORANGE - GND
+// SD - BLUE - GPIO6
+// WS - RED - GPIO5
+// SCK - BROWN - GPIO4
 constexpr gpio_num_t PIN_BCLK = GPIO_NUM_4;
 constexpr gpio_num_t PIN_WS   = GPIO_NUM_5;
 constexpr gpio_num_t PIN_DIN  = GPIO_NUM_6;
